@@ -1,17 +1,31 @@
 import dotenv from "dotenv";
+
 import Fastify from "fastify";
+
 import fastifyStatic from "@fastify/static";
+
 import fastifyCookie from "@fastify/cookie";
+
 import { join } from "node:path";
+
 import { createServer, ServerResponse } from "node:http";
+
 import { logging, server as wisp } from "@mercuryworkshop/wisp-js/server";
+
 import createBareServer from "@tomphttp/bare-server-node";
+
 import { MasqrMiddleware } from "./masqr.js";
 
 dotenv.config();
+
 ServerResponse.prototype.setMaxListeners(50);
 
-const port = process.env.PORT || 2345, server = createServer(), bare = createBareServer("/seal/");
+const port = process.env.PORT ? Number(process.env.PORT) : 2345;
+
+// Allow both Node's HTTP server and Bare-server to co-exist
+const httpServer = createServer();
+const bare = createBareServer("/seal/");
+
 logging.set_level(logging.NONE);
 
 Object.assign(wisp.options, {
@@ -20,15 +34,16 @@ Object.assign(wisp.options, {
   dns_result_order: "ipv4first",
 });
 
-server.on("upgrade", (req, sock, head) =>
+httpServer.on("upgrade", (req, sock, head) =>
   bare.shouldRoute(req) ? bare.routeUpgrade(req, sock, head)
   : req.url.endsWith("/wisp/") ? wisp.routeRequest(req, sock, head)
   : sock.end()
 );
 
 const app = Fastify({
-  serverFactory: h => (server.on("request", (req,res) =>
-    bare.shouldRoute(req) ? bare.routeRequest(req,res) : h(req,res)), server),
+  serverFactory: h => (httpServer.on("request", (req, res) =>
+    bare.shouldRoute(req) ? bare.routeRequest(req, res) : h(req, res)
+  ), httpServer),
   logger: false
 });
 
@@ -41,12 +56,21 @@ await app.register(fastifyCookie);
 if (process.env.MASQR === "true")
   app.addHook("onRequest", MasqrMiddleware);
 
+// Simple HTTP health check endpoint
+app.get("/health", async () => {
+  return "OK";
+});
+
 const proxy = (url, type="application/javascript") => async (req, reply) => {
   try {
     const res = await fetch(url(req)); if (!res.ok) return reply.code(res.status).send();
+
     if (res.headers.get("content-type")) reply.type(res.headers.get("content-type")); else reply.type(type);
+
     return reply.send(Buffer.from(await res.arrayBuffer()));
-  } catch { return reply.code(500).send(); }
+  } catch {
+    return reply.code(500).send();
+  }
 };
 
 app.get("/assets/img/*", proxy(req => `https://dogeub-assets.pages.dev/img/${req.params["*"]}`, ""));
@@ -65,4 +89,5 @@ app.setNotFoundHandler((req, reply) =>
     : reply.code(404).send({ error: "Not Found" })
 );
 
-app.listen({ port }).then(()=>console.log(`Server running on ${port}`));
+await app.listen({ port, host: '0.0.0.0' });
+console.log(`Server running on ${port}`);
