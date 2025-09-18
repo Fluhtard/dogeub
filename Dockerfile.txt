@@ -1,12 +1,27 @@
-FROM node:bookworm-slim
-ENV NODE_ENV=production
+# 1) Use a small, official Node.js base image
+FROM node:18-alpine
 
+# 2) Set working directory
 WORKDIR /app
 
-COPY ["package.json", "./"]
+# 3) Copy package manifests first for efficient caching
+COPY package.json package-lock.json* ./
 
-RUN npm install
+# 4) Install dependencies (production only)
+RUN npm install --production
 
+# 5) Copy the rest of the app
 COPY . .
 
-CMD [ "node", "index.js" ]
+# 6) Build step (optional; only if package.json has a build script)
+# If you don't have a build script, you can remove the two lines below.
+RUN if [ -f package.json ] && [ -n "$(cat package.json | grep -E '\"build\"')" ]; then npm run build; fi
+
+# 7) Expose the port your app uses
+EXPOSE 8000
+
+# 8) Start the app (adjust if your start script is different)
+CMD ["node", "server.js"]
+
+# Optional: If your start command is different, you can replace the CMD line with:
+# CMD ["npm", "start"]
